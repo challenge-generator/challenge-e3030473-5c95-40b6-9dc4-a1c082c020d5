@@ -1,0 +1,460 @@
+openapi: 3.1.0
+info:
+  title: API de Gestión de Préstamos
+  description: >
+    API para gestionar solicitudes de préstamos con arquitectura hexagonal.
+    Soporta múltiples canales de entrada (web, móvil, API externa) con
+    manejo de idempotencia y recuperación automática ante fallos.
+  version: 1.0.0
+  contact:
+    name: Equipo de Desarrollo
+    email: desarrollo@empresa.com
+
+servers:
+  - url: https://api.prestamos.empresa.com/v1
+    description: Servidor de producción
+  - url: https://staging.prestamos.empresa.com/v1
+    description: Servidor de staging
+  - url: http://localhost:8080/v1
+    description: Servidor local
+
+tags:
+  - name: Solicitudes
+    description: Operaciones sobre solicitudes de préstamos
+  - name: Idempotencia
+    description: Control de solicitudes duplicadas
+  - name: Crediticio
+    description: Consulta de historial crediticio
+
+paths:
+  /solicitudes:
+    post:
+      tags:
+        - Solicitudes
+      summary: Crear una nueva solicitud de préstamo
+      operationId: createLoanRequest
+      description: >
+        Crea una nueva solicitud de préstamo. El sistema verifica la
+        idempotencia usando la clave proporcionada en el header.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoanRequestDTO'
+            examples:
+              solicitud-valida:
+                summary: Solicitud válida
+                value:
+                  customerId: "CUST-001"
+                  amount: 50000.00
+                  termMonths: 24
+              solicitud-minima:
+                summary: Solicitud con monto mínimo
+                value:
+                  customerId: "CUST-002"
+                  amount: 1000.00
+                  termMonths: 6
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: true
+          description: Clave única para control de idempotencia
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: X-Channel
+          in: header
+          required: false
+          description: Canal de origen de la solicitud
+          schema:
+            type: string
+            enum: [web, mobile, external_api]
+            default: web
+      responses:
+        '201':
+          description: Solicitud creada exitosamente
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+              description: Identificador único de la solicitud
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponseDTO'
+              examples:
+                aprobada:
+                  summary: Solicitud aprobada
+                  value:
+                    requestId: "550e8400-e29b-41d4-a716-446655440000"
+                    status: APPROVED
+                    message: "Solicitud aprobada"
+                    approvedAmount: 50000.00
+                    interestRate: 12.5
+                rechazada:
+                  summary: Solicitud rechazada
+                  value:
+                    requestId: "550e8400-e29b-41d4-a716-446655440001"
+                    status: REJECTED
+                    message: "Historial crediticio no aprobado"
+        '400':
+          description: Datos de entrada inválidos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                monto-invalido:
+                  summary: Monto fuera de rango
+                  value:
+                    code: "INVALID_AMOUNT"
+                    message: "El monto solicitado debe estar entre 1000 y 500000"
+                    field: "amount"
+                plazo-invalido:
+                  summary: Plazo fuera de rango
+                  value:
+                    code: "INVALID_TERM"
+                    message: "El plazo debe estar entre 6 y 60 meses"
+                    field: "termMonths"
+        '409':
+          description: Solicitud duplicada
+          headers:
+            X-Idempotency-Key:
+              schema:
+                type: string
+              description: Clave de idempotencia duplicada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                duplicada:
+                  summary: Solicitud duplicada
+                  value:
+                    code: "DUPLICATE_REQUEST"
+                    message: "Ya existe una solicitud con esta clave de idempotencia"
+        '422':
+          description: Error de validación de negocio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                cliente-invalido:
+                  summary: Cliente no encontrado
+                  value:
+                    code: "INVALID_CUSTOMER"
+                    message: "El cliente no existe en el sistema"
+                    field: "customerId"
+        '503':
+          description: Servicio externo no disponible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                servicio-caido:
+                  summary: Fallo en servicio de crédito
+                  value:
+                    code: "SERVICE_UNAVAILABLE"
+                    message: "El servicio de verificación crediticia no está disponible"
+                    retryAfter: 30
+
+  /solicitudes/{requestId}:
+    get:
+      tags:
+        - Solicitudes
+      summary: Obtener detalles de una solicitud
+      operationId: getLoanRequest
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          description: Identificador único de la solicitud
+          schema:
+            type: string
+            format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      responses:
+        '200':
+          description: Solicitud encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponseDTO'
+        '404':
+          description: Solicitud no encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /solicitudes/{requestId}/estado:
+    patch:
+      tags:
+        - Solicitudes
+      summary: Actualizar estado de una solicitud
+      operationId: updateLoanRequestStatus
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          description: Identificador único de la solicitud
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusUpdateDTO'
+      responses:
+        '200':
+          description: Estado actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoanResponseDTO'
+        '400':
+          description: Estado inválido para la transición
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /crediticio/verificar:
+    post:
+      tags:
+        - Crediticio
+      summary: Verificar historial crediticio del cliente
+      operationId: checkCreditHistory
+      description: >
+        Endpoint interno para verificar el historial crediticio.
+        Requiere autenticación mediante API Key.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreditCheckRequestDTO'
+      responses:
+        '200':
+          description: Verificación completada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditCheckResponseDTO'
+        '500':
+          description: Error interno del servicio
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    LoanRequestDTO:
+      type: object
+      required:
+        - customerId
+        - amount
+        - termMonths
+      properties:
+        customerId:
+          type: string
+          description: Identificador único del cliente
+          pattern: "^CUST-\\d{3,10}$"
+          example: "CUST-001"
+        amount:
+          type: number
+          description: Monto solicitado en la moneda base
+          minimum: 1000
+          maximum: 500000
+          multipleOf: 0.01
+          example: 50000.00
+        termMonths:
+          type: integer
+          description: Plazo del préstamo en meses
+          minimum: 6
+          maximum: 60
+          example: 24
+        requestDate:
+          type: string
+          format: date
+          description: Fecha de la solicitud (opcional, usa fecha actual si no se provee)
+          example: "2024-01-15"
+
+    LoanResponseDTO:
+      type: object
+      properties:
+        requestId:
+          type: string
+          format: uuid
+          description: Identificador único de la solicitud
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        status:
+          type: string
+          enum:
+            - PENDING
+            - APPROVED
+            - REJECTED
+            - CANCELLED
+          description: Estado actual de la solicitud
+          example: "APPROVED"
+        message:
+          type: string
+          description: Mensaje descriptivo del resultado
+          example: "Solicitud aprobada"
+        approvedAmount:
+          type: number
+          description: Monto aprobado (puede diferir del solicitado)
+          nullable: true
+          example: 50000.00
+        interestRate:
+          type: number
+          format: double
+          description: Tasa de interés anual aplicada
+          nullable: true
+          example: 12.5
+        customerId:
+          type: string
+          description: Identificador del cliente
+          example: "CUST-001"
+        requestDate:
+          type: string
+          format: date
+          description: Fecha de la solicitud
+          example: "2024-01-15"
+
+    StatusUpdateDTO:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - PENDING
+            - APPROVED
+            - REJECTED
+            - CANCELLED
+          description: Nuevo estado de la solicitud
+        reason:
+          type: string
+          description: Razón del cambio de estado
+          maxLength: 500
+
+    CreditCheckRequestDTO:
+      type: object
+      required:
+        - customerId
+      properties:
+        customerId:
+          type: string
+          description: Identificador del cliente a verificar
+          example: "CUST-001"
+        requestedAmount:
+          type: number
+          description: Monto solicitado
+          example: 50000.00
+
+    CreditCheckResponseDTO:
+      type: object
+      properties:
+        customerId:
+          type: string
+          description: Identificador del cliente
+          example: "CUST-001"
+        approved:
+          type: boolean
+          description: Indicador de aprobación crediticia
+          example: true
+        creditScore:
+          type: integer
+          description: Puntuación crediticia (300-850)
+          minimum: 300
+          maximum: 850
+          example: 720
+        maxApprovedAmount:
+          type: number
+          description: Monto máximo aprobado
+          example: 100000.00
+        riskLevel:
+          type: string
+          enum:
+            - LOW
+            - MEDIUM
+            - HIGH
+          description: Nivel de riesgo asociado
+          example: "LOW"
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Código de error técnico
+          example: "INVALID_AMOUNT"
+        message:
+          type: string
+          description: Mensaje legible para el usuario
+          example: "El monto solicitado debe estar entre 1000 y 500000"
+        field:
+          type: string
+          description: Campo que causó el error
+          nullable: true
+          example: "amount"
+        retryAfter:
+          type: integer
+          description: Segundos hasta reintentar (para errores 503)
+          nullable: true
+          example: 30
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp del error
+          example: "2024-01-15T10:30:00Z"
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >
+        API Key para autenticación de servicios internos.
+        Debe ser proporcionada por el administrador del sistema.
+
+  responses:
+    BadRequestError:
+      description: Solicitud incorrecta
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    UnauthorizedError:
+      description: No autorizado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFoundError:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    InternalServerError:
+      description: Error interno del servidor
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

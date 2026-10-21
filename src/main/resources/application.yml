@@ -1,0 +1,89 @@
+spring:
+  application:
+    name: prestamos
+  
+  webflux:
+    base-path: /api
+    
+  datasource:
+    url: jdbc:h2:mem:prestamosdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+    
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      settings:
+        web-allow-others: true
+  
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+server:
+  port: 8080
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: on_param
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,env,configprops
+  endpoint:
+    health:
+      show-details: always
+
+camel:
+  springboot:
+    main-run-controller: true
+    name: PrestamosCamel
+    
+  component:
+    servlet:
+      mapping:
+        context-path: /camel/*
+
+integration:
+  idempotency:
+    enabled: true
+    cache:
+      ttl: 3600
+      max-size: 10000
+    key-header: X-Request-ID
+  
+  backpressure:
+    buffer-size: 1000
+    overflow-strategy: DROP_OLDEST
+  
+  credit-check-service:
+    base-url: https://api.external-credit-service.com/v1
+    timeout: 5000
+    retry:
+      max-attempts: 3
+      delay: 1000
+      multiplier: 2.0
+    circuit-breaker:
+      failure-rate-threshold: 50
+      wait-duration-in-open-state: 30000
+      permitted-number-of-calls-in-half-open-state: 10
+      sliding-window-size: 20
+      sliding-window-type: COUNT_BASED
+
+logging:
+  level:
+    root: INFO
+    com.empresa.prestamos: DEBUG
+    org.apache.camel: INFO
+    org.springframework.web: INFO
+    reactor.netty: INFO
+"
